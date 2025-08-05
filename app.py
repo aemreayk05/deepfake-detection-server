@@ -110,7 +110,7 @@ def analyze():
         logger.info(f"📤 URL: {HF_API_URL}")
         logger.info(f"🔑 Token: {HF_TOKEN[:10]}..." if len(HF_TOKEN) > 10 else "🔑 Token: Geçersiz")
         
-        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=60)
+        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=120)
 
         logger.info(f"📥 Response status: {response.status_code}")
         
