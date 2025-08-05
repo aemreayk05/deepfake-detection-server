@@ -8,6 +8,10 @@ import base64
 import time
 import traceback
 import logging
+from dotenv import load_dotenv
+
+# Environment variables yükle
+load_dotenv()
 
 # Logging ayarları
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +31,16 @@ if not HF_TOKEN:
     HF_TOKEN = ""  # Public model için token gerekmez
 else:
     logger.info("✅ HF_TOKEN ayarlandı, private model kullanılıyor...")
+
+# ✅ GEMINI API KONFİGÜRASYONU - PROXY
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+
+if not GEMINI_API_KEY:
+    logger.warning("⚠️ GEMINI_API_KEY bulunamadı, Gemini servisleri devre dışı...")
+    logger.warning("⚠️ Render.com'da GEMINI_API_KEY environment variable'ını ayarlayın!")
+else:
+    logger.info("✅ GEMINI_API_KEY ayarlandı, Gemini servisleri aktif...")
 
 headers = {
     "Content-Type": "application/json"  # ✅ JSON formatı için
@@ -49,7 +63,8 @@ def health_check():
             "model_loaded": True,
             "timestamp": time.time(),
             "server": "Deepfake Detection API Server",
-            "hf_token_configured": HF_TOKEN != "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            "hf_token_configured": HF_TOKEN != "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "gemini_configured": bool(GEMINI_API_KEY)
         })
     except Exception as e:
         logger.error(f"❌ Health check hatası: {e}")
@@ -201,6 +216,190 @@ def analyze():
             "traceback": traceback.format_exc()
         }), 500
 
+# ✅ GEMINI API PROXY ENDPOINT'LERİ
+@app.route("/api/gemini/text", methods=["POST"])
+def gemini_text():
+    """Gemini metin oluşturma proxy endpoint'i"""
+    try:
+        if not GEMINI_API_KEY:
+            return jsonify({
+                "success": False,
+                "error": "Gemini API key yapılandırılmamış"
+            }), 500
+
+        logger.info("📝 Gemini metin oluşturma isteği alındı")
+        
+        if not request.is_json:
+            return jsonify({"error": "JSON formatında veri bekleniyor"}), 400
+        
+        data = request.json
+        prompt = data.get('prompt')
+        image_data = data.get('imageData')
+        image_mime = data.get('imageMime', 'image/jpeg')
+        
+        if not prompt:
+            return jsonify({"error": "Prompt gerekli"}), 400
+
+        # Gemini API isteği hazırla
+        parts = []
+        if image_data:
+            parts.append({
+                "inline_data": {
+                    "mime_type": image_mime,
+                    "data": image_data
+                }
+            })
+        
+        parts.append({"text": prompt})
+        
+        payload = {
+            "contents": [{"parts": parts}]
+        }
+
+        # Gemini API'ye istek gönder
+        response = requests.post(
+            f"{GEMINI_BASE_URL}/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}",
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=30
+        )
+
+        if not response.ok:
+            logger.error(f"❌ Gemini API hatası: {response.status_code} - {response.text}")
+            return jsonify({
+                "success": False,
+                "error": f"Gemini API hatası: {response.status_code}"
+            }), 500
+
+        gemini_data = response.json()
+        
+        if gemini_data.get('candidates') and gemini_data['candidates'][0].get('content'):
+            text = gemini_data['candidates'][0]['content']['parts'][0]['text']
+            logger.info(f"✅ Gemini metin oluşturuldu: {text[:50]}...")
+            return jsonify({
+                "success": True,
+                "text": text.strip()
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Gemini geçersiz yanıt döndü"
+            }), 500
+
+    except Exception as e:
+        logger.error(f"❌ Gemini metin oluşturma hatası: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route("/api/gemini/image", methods=["POST"])
+def gemini_image():
+    """Gemini görsel oluşturma proxy endpoint'i"""
+    try:
+        if not GEMINI_API_KEY:
+            return jsonify({
+                "success": False,
+                "error": "Gemini API key yapılandırılmamış"
+            }), 500
+
+        logger.info("🎨 Gemini görsel oluşturma isteği alındı")
+        
+        if not request.is_json:
+            return jsonify({"error": "JSON formatında veri bekleniyor"}), 400
+        
+        data = request.json
+        prompt = data.get('prompt')
+        input_image_data = data.get('inputImageBase64')
+        input_image_mime = data.get('inputImageMime', 'image/jpeg')
+        
+        if not prompt:
+            return jsonify({"error": "Prompt gerekli"}), 400
+
+        # Gemini API isteği hazırla
+        parts = []
+        if input_image_data:
+            parts.append({
+                "inline_data": {
+                    "mime_type": input_image_mime,
+                    "data": input_image_data
+                }
+            })
+            parts.append({"text": f"Edit this image: {prompt}"})
+        else:
+            parts.append({"text": f"Create an image: {prompt}"})
+
+        payload = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"]
+            },
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"}
+            ]
+        }
+
+        # Gemini API'ye istek gönder
+        response = requests.post(
+            f"{GEMINI_BASE_URL}/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}",
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=60
+        )
+
+        if not response.ok:
+            logger.error(f"❌ Gemini API hatası: {response.status_code} - {response.text}")
+            return jsonify({
+                "success": False,
+                "error": f"Gemini API hatası: {response.status_code}"
+            }), 500
+
+        gemini_data = response.json()
+        
+        # Safety check
+        if gemini_data.get('candidates') and gemini_data['candidates'][0]:
+            candidate = gemini_data['candidates'][0]
+            
+            if candidate.get('finishReason') == 'IMAGE_SAFETY':
+                return jsonify({
+                    "success": False,
+                    "error": "Görsel güvenlik politikaları nedeniyle oluşturulamadı",
+                    "errorType": "SAFETY"
+                }), 400
+            
+            if candidate.get('finishReason') and candidate['finishReason'] != 'STOP':
+                return jsonify({
+                    "success": False,
+                    "error": f"Görsel oluşturma tamamlanamadı: {candidate['finishReason']}",
+                    "errorType": "FINISH_REASON"
+                }), 400
+            
+            # Image data ara
+            if candidate.get('content'):
+                for part in candidate['content']['parts']:
+                    if part.get('inlineData') and part['inlineData'].get('data'):
+                        logger.info("✅ Gemini görsel oluşturuldu")
+                        return jsonify({
+                            "success": True,
+                            "imageData": part['inlineData']['data'],
+                            "mimeType": part['inlineData'].get('mimeType', 'image/png')
+                        })
+        
+        return jsonify({
+            "success": False,
+            "error": "Görsel oluşturulamadı"
+        }), 500
+
+    except Exception as e:
+        logger.error(f"❌ Gemini görsel oluşturma hatası: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 @app.route("/", methods=["GET"])
 def home():
     """Ana sayfa"""
@@ -210,10 +409,13 @@ def home():
             "model": "dima806/deepfake_vs_real_image_detection",
             "status": "active",
             "hf_token_configured": HF_TOKEN != "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "gemini_configured": bool(GEMINI_API_KEY),
             "endpoints": {
                 "health": "/health",
                 "model_info": "/model-info", 
-                "analyze": "/analyze"
+                "analyze": "/analyze",
+                "gemini_text": "/api/gemini/text",
+                "gemini_image": "/api/gemini/image"
             },
             "timestamp": time.time()
         })
