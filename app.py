@@ -20,16 +20,21 @@ CORS(app)
 HF_API_URL = "https://api-inference.huggingface.co/models/dima806/deepfake_vs_real_image_detection"
 HF_TOKEN = os.getenv("HF_TOKEN")
 
-# Token kontrolü
+# Token kontrolü - Geçici olarak public model kullan
 if not HF_TOKEN:
-    logger.error("❌ HF_TOKEN environment variable bulunamadı!")
-    logger.error("❌ Lütfen HF_TOKEN environment variable'ını ayarlayın")
-    HF_TOKEN = "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  # Fallback token
+    logger.warning("⚠️ HF_TOKEN bulunamadı, public model kullanılıyor...")
+    HF_API_URL = "https://api-inference.huggingface.co/models/dima806/deepfake_vs_real_image_detection"
+    HF_TOKEN = ""  # Public model için token gerekmez
+else:
+    logger.info("✅ HF_TOKEN ayarlandı, private model kullanılıyor...")
 
 headers = {
-    "Authorization": f"Bearer {HF_TOKEN}",
     "Content-Type": "application/json"  # ✅ JSON formatı için
 }
+
+# Token varsa Authorization header'ı ekle
+if HF_TOKEN:
+    headers["Authorization"] = f"Bearer {HF_TOKEN}"
 
 logger.info(f"✅ Hugging Face API yapılandırıldı: {HF_API_URL}")
 logger.info(f"✅ Token durumu: {'Ayarlandı' if HF_TOKEN != 'hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' else 'Fallback'}")
