@@ -1,191 +1,232 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import base64
-import io
-import numpy as np
-from PIL import Image
-import torch
-from transformers import ViTImageProcessor, ViTForImageClassification
-import logging
+import requests
 import os
-from datetime import datetime
-
-app = Flask(__name__)
-CORS(app)
+from PIL import Image
+import io
+import base64
+import time
+import traceback
+import logging
 
 # Logging ayarları
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global değişkenler
-model = None
-processor = None
+app = Flask(__name__)
+CORS(app)
 
-def load_model():
-    """Deepfake detection modelini yükle"""
-    global model, processor
-    try:
-        logger.info("🤖 Deepfake detection modeli yükleniyor...")
-        
-        # Hugging Face modelini yükle
-        model_name = "dima806/deepfake_vs_real_image_detection"
-        processor = ViTImageProcessor.from_pretrained(model_name)
-        model = ViTForImageClassification.from_pretrained(model_name)
-        
-        logger.info("✅ Model başarıyla yüklendi!")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Model yükleme hatası: {e}")
-        return False
+# ✅ HUGGING FACE API KONFİGÜRASYONU - DEEPFAKE DETECTION
+HF_API_URL = "https://api-inference.huggingface.co/models/dima806/deepfake_vs_real_image_detection"
+HF_TOKEN = os.getenv("HF_TOKEN")
 
-def preprocess_image(image_data):
-    """Görseli model için hazırla"""
-    try:
-        # Base64'ten görseli decode et
-        if isinstance(image_data, str):
-            if image_data.startswith('data:image'):
-                # data:image/jpeg;base64, formatından base64 kısmını al
-                image_data = image_data.split(',')[1]
-            image_bytes = base64.b64decode(image_data)
-        else:
-            image_bytes = image_data
-        
-        # PIL Image'e çevir
-        image = Image.open(io.BytesIO(image_bytes))
-        
-        # RGB'ye çevir (RGBA ise)
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        
-        # Model için hazırla
-        inputs = processor(images=image, return_tensors="pt")
-        
-        return inputs, image
-    except Exception as e:
-        logger.error(f"❌ Görsel ön işleme hatası: {e}")
-        raise e
+# Token kontrolü
+if not HF_TOKEN:
+    logger.error("❌ HF_TOKEN environment variable bulunamadı!")
+    logger.error("❌ Lütfen HF_TOKEN environment variable'ını ayarlayın")
+    HF_TOKEN = "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  # Fallback token
 
-def predict_deepfake(inputs):
-    """Deepfake detection tahmini yap"""
-    try:
-        with torch.no_grad():
-            outputs = model(**inputs)
-            logits = outputs.logits
-            probabilities = torch.nn.functional.softmax(logits, dim=-1)
-            
-            # Sonuçları al
-            fake_prob = probabilities[0][1].item()  # Fake olasılığı
-            real_prob = probabilities[0][0].item()  # Real olasılığı
-            
-            # Tahmin
-            prediction = "Fake" if fake_prob > real_prob else "Real"
-            confidence = max(fake_prob, real_prob) * 100
-            
-            return {
-                "prediction": prediction,
-                "confidence": round(confidence, 2),
-                "probabilities": {
-                    "real": round(real_prob * 100, 2),
-                    "fake": round(fake_prob * 100, 2)
-                }
-            }
-    except Exception as e:
-        logger.error(f"❌ Tahmin hatası: {e}")
-        raise e
+headers = {
+    "Authorization": f"Bearer {HF_TOKEN}",
+    "Content-Type": "application/json"  # ✅ JSON formatı için
+}
 
-@app.route('/health', methods=['GET'])
+logger.info(f"✅ Hugging Face API yapılandırıldı: {HF_API_URL}")
+logger.info(f"✅ Token durumu: {'Ayarlandı' if HF_TOKEN != 'hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' else 'Fallback'}")
+
+@app.route("/health", methods=["GET"])
 def health_check():
-    """Sağlık kontrolü"""
-    return jsonify({
-        "status": "healthy",
-        "model_loaded": model is not None,
-        "timestamp": datetime.now().isoformat()
-    })
-
-@app.route('/analyze', methods=['POST'])
-def analyze_image():
-    """Görsel analizi yap"""
+    """Sağlık kontrolü endpoint'i"""
     try:
-        # Request verilerini al
-        data = request.get_json()
-        
-        if not data or 'image' not in data:
-            return jsonify({"error": "Görsel verisi bulunamadı"}), 400
-        
-        image_data = data['image']
-        
-        logger.info("🔍 Görsel analizi başlıyor...")
-        start_time = datetime.now()
-        
-        # Görseli ön işle
-        inputs, image = preprocess_image(image_data)
-        
-        # Tahmin yap
-        result = predict_deepfake(inputs)
-        
-        # İşlem süresini hesapla
-        processing_time = (datetime.now() - start_time).total_seconds()
-        
-        # Sonucu formatla
-        response = {
-            "success": True,
-            "prediction": result["prediction"],
-            "confidence": result["confidence"],
-            "probabilities": result["probabilities"],
-            "processing_time": round(processing_time, 3),
-            "model_info": {
-                "name": "dima806/deepfake_vs_real_image_detection",
-                "type": "ViT (Vision Transformer)",
-                "description": "Deepfake vs Real Image Detection"
-            },
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        logger.info(f"✅ Analiz tamamlandı: {result['prediction']} ({result['confidence']}%)")
-        return jsonify(response)
-        
-    except Exception as e:
-        logger.error(f"❌ Analiz hatası: {e}")
         return jsonify({
-            "success": False,
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }), 500
+            "status": "healthy",
+            "model": "dima806/deepfake_vs_real_image_detection",
+            "model_loaded": True,
+            "timestamp": time.time(),
+            "server": "Deepfake Detection API Server",
+            "hf_token_configured": HF_TOKEN != "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        })
+    except Exception as e:
+        logger.error(f"❌ Health check hatası: {e}")
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/model-info', methods=['GET'])
+@app.route("/model-info", methods=["GET"])
 def model_info():
     """Model bilgilerini döndür"""
-    return jsonify({
-        "model_name": "dima806/deepfake_vs_real_image_detection",
-        "model_type": "ViT (Vision Transformer)",
-        "description": "Deepfake vs Real Image Detection Model",
-        "accuracy": "99.27%",
-        "paper": "https://www.kaggle.com/code/dima806/deepfake-vs-real-faces-detection-vit",
-        "huggingface": "https://huggingface.co/dima806/deepfake_vs_real_image_detection",
-        "loaded": model is not None,
-        "timestamp": datetime.now().isoformat()
-    })
+    try:
+        return jsonify({
+            "model_name": "Deepfake vs Real Image Detection",
+            "model_type": "ViT (Vision Transformer)",
+            "author": "dima806",
+            "size": "Medium",
+            "description": "Deepfake vs Real image detection using Vision Transformer",
+            "accuracy": "99.27%",
+            "url": "https://huggingface.co/dima806/deepfake_vs_real_image_detection"
+        })
+    except Exception as e:
+        logger.error(f"❌ Model info hatası: {e}")
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/', methods=['GET'])
-def root():
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    try:
+        logger.info("🔍 Deepfake analizi isteği alındı")
+        
+        # Request kontrolü
+        if not request.is_json:
+            logger.error("❌ JSON formatında veri bekleniyor")
+            return jsonify({"error": "JSON formatında veri bekleniyor"}), 400
+        
+        if 'image' not in request.json:
+            logger.error("❌ 'image' field'ı bulunamadı")
+            return jsonify({"error": "Görsel bulunamadı - 'image' field'ı gerekli"}), 400
+
+        image_data = request.json['image']
+        logger.info(f"📸 Görsel verisi alındı, uzunluk: {len(image_data)}")
+        
+        if image_data.startswith('data:image'):
+            image_data = image_data.split(',')[1]
+        
+        try:
+            image_bytes = base64.b64decode(image_data)
+            logger.info(f"✅ Görsel decode edildi, boyut: {len(image_bytes)} bytes")
+        except Exception as e:
+            logger.error(f"❌ Base64 decode hatası: {e}")
+            return jsonify({"error": f"Görsel decode hatası: {str(e)}"}), 400
+
+        # ✅ HUGGING FACE API'YE GÖNDER
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        
+        payload = {
+            "inputs": base64_image
+        }
+        
+        logger.info(f"📤 Hugging Face Deepfake API'ye gönderiliyor...")
+        logger.info(f"📤 URL: {HF_API_URL}")
+        logger.info(f"🔑 Token: {HF_TOKEN[:10]}..." if len(HF_TOKEN) > 10 else "🔑 Token: Geçersiz")
+        
+        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=60)
+
+        logger.info(f"📥 Response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            logger.error(f"❌ Hugging Face API hatası: {response.status_code}")
+            logger.error(f"❌ Response text: {response.text}")
+            return jsonify({
+                "error": f"Hugging Face API hatası: {response.status_code}",
+                "detail": response.text,
+                "token_configured": HF_TOKEN != "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }), 500
+
+        result = response.json()
+        logger.info(f"✅ Hugging Face API response: {result}")
+        
+        if len(result) >= 2:
+            result1 = result[0]
+            result2 = result[1]
+
+            logger.info(f"📊 Result 1: {result1}")
+            logger.info(f"📊 Result 2: {result2}")
+
+            # ✅ DEEPFAKE DETECTION MANTIĞI
+            # fake = sahte, real = gerçek
+            if 'fake' in result1['label'].lower():
+                fake_prob = result1['score'] * 100
+                real_prob = result2['score'] * 100
+                logger.info(f"🎭 Fake (Sahte) skoru: {fake_prob}%")
+                logger.info(f"✅ Real (Gerçek) skoru: {real_prob}%")
+            else:
+                real_prob = result1['score'] * 100
+                fake_prob = result2['score'] * 100
+                logger.info(f"✅ Real (Gerçek) skoru: {real_prob}%")
+                logger.info(f"🎭 Fake (Sahte) skoru: {fake_prob}%")
+
+            # ✅ DEEPFAKE TAHMİNİ
+            prediction = "Sahte" if fake_prob > real_prob else "Gerçek"
+            confidence = max(fake_prob, real_prob)
+            
+            logger.info(f"🎯 Deepfake Tahmini: {prediction} (Güven: {confidence}%)")
+            logger.info(f"🎭 Sahte olasılığı: {fake_prob}%")
+            logger.info(f"✅ Gerçek olasılığı: {real_prob}%")
+            
+        else:
+            logger.warning(f"⚠️ Beklenmeyen response format: {result}")
+            prediction = "Bilinmiyor"
+            confidence = 0
+            real_prob = 0
+            fake_prob = 0
+
+        final_result = {
+            "success": True,
+            "prediction": prediction,
+            "confidence": round(confidence, 2),
+            "probabilities": {
+                "real": round(real_prob, 2),
+                "fake": round(fake_prob, 2)
+            },
+            "model_used": "dima806/deepfake_vs_real_image_detection",
+            "model_info": "ViT-based Deepfake vs Real detection",
+            "processing_time": time.time(),
+            "raw_scores": {
+                "fake": fake_prob,
+                "real": real_prob
+            }
+        }
+        
+        logger.info(f"✅ Deepfake analizi tamamlandı: {prediction} ({confidence}%)")
+        return jsonify(final_result)
+
+    except Exception as e:
+        logger.error(f"❌ Deepfake analizi hatası: {e}")
+        logger.error(f"❌ Hata detayı: {traceback.format_exc()}")
+        return jsonify({
+            "success": False,
+            "error": "Sunucu hatası", 
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+@app.route("/", methods=["GET"])
+def home():
     """Ana sayfa"""
-    return jsonify({
-        "service": "Deepfake Detection API",
-        "version": "1.0.0",
-        "endpoints": {
-            "health": "/health",
-            "analyze": "/analyze (POST)",
-            "model_info": "/model-info"
-        },
-        "model": "dima806/deepfake_vs_real_image_detection",
-        "status": "running"
-    })
+    try:
+        return jsonify({
+            "message": "Deepfake Detection API Server",
+            "model": "dima806/deepfake_vs_real_image_detection",
+            "status": "active",
+            "hf_token_configured": HF_TOKEN != "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "endpoints": {
+                "health": "/health",
+                "model_info": "/model-info", 
+                "analyze": "/analyze"
+            },
+            "timestamp": time.time()
+        })
+    except Exception as e:
+        logger.error(f"❌ Ana sayfa hatası: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Error handler'lar
+@app.errorhandler(404)
+def not_found(error):
+    logger.error(f"❌ 404 hatası: {error}")
+    return jsonify({"error": "Endpoint bulunamadı"}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"❌ 500 hatası: {error}")
+    return jsonify({"error": "Sunucu hatası"}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    logger.error(f"❌ Genel hata: {e}")
+    logger.error(f"❌ Hata detayı: {traceback.format_exc()}")
+    return jsonify({"error": "Beklenmeyen hata"}), 500
 
 if __name__ == '__main__':
-    # Modeli yükle
-    if load_model():
-        logger.info("🚀 Deepfake Detection Server başlatılıyor...")
-        port = int(os.environ.get('PORT', 5000))
-        app.run(host='0.0.0.0', port=port, debug=False)
-    else:
-        logger.error("❌ Model yüklenemedi, server başlatılamıyor!") 
+    port = int(os.environ.get('PORT', 5000))
+    logger.info(f"🚀 Deepfake Detection API Server başlatılıyor - Port: {port}")
+    logger.info(f"🤖 Model: dima806/deepfake_vs_real_image_detection")
+    logger.info(f"🔑 HF_TOKEN durumu: {'Ayarlandı' if HF_TOKEN != 'hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' else 'AYARLANMADI!'}")
+    
+    app.run(host='0.0.0.0', port=port, debug=False) 

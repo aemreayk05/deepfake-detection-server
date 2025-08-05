@@ -1,8 +1,5 @@
 Flask==2.3.3
 Flask-CORS==4.0.0
-torch==2.6.0
-torchvision==0.21.0
-transformers==4.40.0
+requests==2.32.4
 Pillow==10.4.0
-numpy==1.26.4
 gunicorn==21.2.0 
