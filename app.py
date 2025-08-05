@@ -42,6 +42,17 @@ if not GEMINI_API_KEY:
 else:
     logger.info("✅ GEMINI_API_KEY ayarlandı, Gemini servisleri aktif...")
 
+# ✅ SIGHTENGINE API KONFİGÜRASYONU - PROXY
+SIGHTENGINE_API_USER = os.getenv("SIGHTENGINE_API_USER")
+SIGHTENGINE_API_SECRET = os.getenv("SIGHTENGINE_API_SECRET")
+SIGHTENGINE_BASE_URL = "https://api.sightengine.com/1.0"
+
+if not SIGHTENGINE_API_USER or not SIGHTENGINE_API_SECRET:
+    logger.warning("⚠️ SIGHTENGINE API key'leri bulunamadı, Sightengine servisleri devre dışı...")
+    logger.warning("⚠️ Render.com'da SIGHTENGINE_API_USER ve SIGHTENGINE_API_SECRET environment variable'larını ayarlayın!")
+else:
+    logger.info("✅ SIGHTENGINE API key'leri ayarlandı, Sightengine servisleri aktif...")
+
 headers = {
     "Content-Type": "application/json"  # ✅ JSON formatı için
 }
@@ -400,6 +411,70 @@ def gemini_image():
             "error": str(e)
         }), 500
 
+# ✅ SIGHTENGINE API PROXY ENDPOINT'İ
+@app.route("/api/sightengine/check", methods=["POST"])
+def sightengine_check():
+    """Sightengine AI detection proxy endpoint'i"""
+    try:
+        if not SIGHTENGINE_API_USER or not SIGHTENGINE_API_SECRET:
+            return jsonify({
+                "success": False,
+                "error": "Sightengine API key'leri yapılandırılmamış"
+            }), 500
+
+        logger.info("🔍 Sightengine AI detection isteği alındı")
+        
+        if not request.is_json:
+            return jsonify({"error": "JSON formatında veri bekleniyor"}), 400
+        
+        data = request.json
+        image_url = data.get('url')
+        image_data = data.get('image')
+        
+        if not image_url and not image_data:
+            return jsonify({"error": "URL veya image data gerekli"}), 400
+
+        # Sightengine API isteği hazırla
+        payload = {
+            'models': 'genai',
+            'api_user': SIGHTENGINE_API_USER,
+            'api_secret': SIGHTENGINE_API_SECRET
+        }
+        
+        if image_url:
+            payload['url'] = image_url
+        elif image_data:
+            payload['image'] = image_data
+
+        # Sightengine API'ye istek gönder
+        response = requests.post(
+            f"{SIGHTENGINE_BASE_URL}/check.json",
+            data=payload,
+            timeout=30
+        )
+
+        if not response.ok:
+            logger.error(f"❌ Sightengine API hatası: {response.status_code} - {response.text}")
+            return jsonify({
+                "success": False,
+                "error": f"Sightengine API hatası: {response.status_code}"
+            }), 500
+
+        sightengine_data = response.json()
+        logger.info(f"✅ Sightengine yanıtı alındı: {sightengine_data}")
+        
+        return jsonify({
+            "success": True,
+            "data": sightengine_data
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Sightengine AI detection hatası: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 @app.route("/", methods=["GET"])
 def home():
     """Ana sayfa"""
@@ -410,12 +485,14 @@ def home():
             "status": "active",
             "hf_token_configured": HF_TOKEN != "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
             "gemini_configured": bool(GEMINI_API_KEY),
+            "sightengine_configured": bool(SIGHTENGINE_API_USER and SIGHTENGINE_API_SECRET),
             "endpoints": {
                 "health": "/health",
                 "model_info": "/model-info", 
                 "analyze": "/analyze",
                 "gemini_text": "/api/gemini/text",
-                "gemini_image": "/api/gemini/image"
+                "gemini_image": "/api/gemini/image",
+                "sightengine_check": "/api/sightengine/check"
             },
             "timestamp": time.time()
         })
