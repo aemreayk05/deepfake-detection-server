@@ -88,13 +88,21 @@ def analyze():
 
         image_data = request.json['image']
         logger.info(f"📸 Görsel verisi alındı, uzunluk: {len(image_data)}")
+        logger.info(f"📸 Görsel verisi (ilk 100 karakter): {image_data[:100]}")
         
         if image_data.startswith('data:image'):
             image_data = image_data.split(',')[1]
+            logger.info(f"📸 Base64 kısmı alındı, uzunluk: {len(image_data)}")
         
         try:
             image_bytes = base64.b64decode(image_data)
             logger.info(f"✅ Görsel decode edildi, boyut: {len(image_bytes)} bytes")
+            
+            # Görsel boyutu kontrolü
+            if len(image_bytes) < 100:
+                logger.error(f"❌ Görsel çok küçük: {len(image_bytes)} bytes")
+                return jsonify({"error": f"Görsel çok küçük: {len(image_bytes)} bytes - geçerli bir görsel değil"}), 400
+                
         except Exception as e:
             logger.error(f"❌ Base64 decode hatası: {e}")
             return jsonify({"error": f"Görsel decode hatası: {str(e)}"}), 400
