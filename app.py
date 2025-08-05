@@ -100,10 +100,12 @@ def analyze():
             return jsonify({"error": f"Görsel decode hatası: {str(e)}"}), 400
 
         # ✅ HUGGING FACE API'YE GÖNDER
+        # Hugging Face API için doğru format: data:image/jpeg;base64,{base64_data}
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
         
+        # API'nin beklediği format
         payload = {
-            "inputs": base64_image
+            "inputs": f"data:image/jpeg;base64,{base64_image}"
         }
         
         logger.info(f"📤 Hugging Face Deepfake API'ye gönderiliyor...")
