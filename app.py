@@ -440,24 +440,58 @@ def sightengine_check():
             'api_user': SIGHTENGINE_API_USER,
             'api_secret': SIGHTENGINE_API_SECRET
         }
-        
+
+        files = None
+
         if image_url:
             payload['url'] = image_url
+            logger.info("🌐 URL üzerinden kontrol edilecek")
         elif image_data:
-            payload['image'] = image_data
+            # Base64 string geldiyse dosyaya dönüştürüp 'media' olarak gönder
+            logger.info("🖼️ Base64 image alındı, dosya upload'a dönüştürülüyor...")
+            try:
+                if image_data.startswith('data:image'):
+                    image_data = image_data.split(',')[1]
+                image_bytes = base64.b64decode(image_data)
+                files = {
+                    'media': ('image.jpg', image_bytes, 'image/jpeg')
+                }
+                logger.info(f"✅ Base64 decode başarılı, boyut: {len(image_bytes)} bytes")
+            except Exception as e:
+                logger.error(f"❌ Base64 decode hatası: {e}")
+                return jsonify({
+                    "success": False,
+                    "error": f"Base64 decode hatası: {str(e)}"
+                }), 400
 
         # Sightengine API'ye istek gönder
-        response = requests.post(
-            f"{SIGHTENGINE_BASE_URL}/check.json",
-            data=payload,
-            timeout=30
-        )
+        try:
+            if files:
+                response = requests.post(
+                    f"{SIGHTENGINE_BASE_URL}/check.json",
+                    data=payload,
+                    files=files,
+                    timeout=30
+                )
+            else:
+                response = requests.post(
+                    f"{SIGHTENGINE_BASE_URL}/check.json",
+                    data=payload,
+                    timeout=30
+                )
+        except Exception as e:
+            logger.error(f"❌ Sightengine isteği gönderilemedi: {e}")
+            return jsonify({
+                "success": False,
+                "error": f"Sightengine isteği gönderilemedi: {str(e)}"
+            }), 500
 
         if not response.ok:
             logger.error(f"❌ Sightengine API hatası: {response.status_code} - {response.text}")
             return jsonify({
                 "success": False,
-                "error": f"Sightengine API hatası: {response.status_code}"
+                "error": f"Sightengine API hatası: {response.status_code}",
+                "detail": response.text
             }), 500
 
         sightengine_data = response.json()
