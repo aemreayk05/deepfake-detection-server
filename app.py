@@ -494,10 +494,42 @@ def gemini_image():
                 for part in candidate['content']['parts']:
                     if part.get('inlineData') and part['inlineData'].get('data'):
                         logger.info("✅ Gemini görsel oluşturuldu")
+                        inline_data_b64 = part['inlineData']['data']
+                        mime_type = part['inlineData'].get('mimeType', 'image/png')
+
+                        # Eğer R2 yapılandırılmışsa görüntüyü yükleyip URL döndür
+                        try:
+                            client = r2_client()
+                            if client is not None:
+                                import uuid, base64 as _b64
+                                file_ext = 'png' if 'png' in mime_type else 'jpg'
+                                object_key = f"generated/{int(time.time()*1000)}_{uuid.uuid4().hex}.{file_ext}"
+                                image_bytes = _b64.b64decode(inline_data_b64)
+                                client.put_object(
+                                    Bucket=R2_BUCKET,
+                                    Key=object_key,
+                                    Body=image_bytes,
+                                    ContentType=mime_type,
+                                )
+                                # Erişim için presigned GET URL üret
+                                get_url = client.generate_presigned_url(
+                                    "get_object",
+                                    Params={"Bucket": R2_BUCKET, "Key": object_key},
+                                    ExpiresIn=60 * 60,  # 1 saat
+                                )
+                                return jsonify({
+                                    "success": True,
+                                    "url": get_url,
+                                    "mimeType": mime_type
+                                })
+                        except Exception as upload_error:
+                            logger.error(f"❌ R2 yükleme hatası: {upload_error}")
+
+                        # R2 yoksa geriye base64 döndür (geri uyum)
                         return jsonify({
                             "success": True,
-                            "imageData": part['inlineData']['data'],
-                            "mimeType": part['inlineData'].get('mimeType', 'image/png')
+                            "imageData": inline_data_b64,
+                            "mimeType": mime_type
                         })
         
         return jsonify({
