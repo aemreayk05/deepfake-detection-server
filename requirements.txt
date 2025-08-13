@@ -4,3 +4,4 @@ requests==2.32.4
 Pillow==10.4.0
 gunicorn==21.2.0
 python-dotenv==1.0.0 
+vercel-wsgi
