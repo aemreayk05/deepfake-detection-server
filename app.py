@@ -9,6 +9,7 @@ import time
 import traceback
 import logging
 from dotenv import load_dotenv
+import boto3
 
 # Environment variables yükle
 load_dotenv()
@@ -63,6 +64,23 @@ if HF_TOKEN:
 
 logger.info(f"✅ Hugging Face API yapılandırıldı: {HF_API_URL}")
 logger.info(f"✅ Token durumu: {'Ayarlandı' if HF_TOKEN != 'hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' else 'Fallback'}")
+
+# === Cloudflare R2 ayarları (opsiyonel ama önerilir) ===
+R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
+R2_BUCKET = os.getenv("R2_BUCKET")
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
+
+def r2_client():
+	if not all([R2_ACCOUNT_ID, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY]):
+		return None
+	return boto3.client(
+		"s3",
+		endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+		aws_access_key_id=R2_ACCESS_KEY_ID,
+		aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+		region_name="auto",
+	)
 
 @app.route("/health", methods=["GET"])
 def health_check():
@@ -226,6 +244,89 @@ def analyze():
             "message": str(e),
             "traceback": traceback.format_exc()
         }), 500
+
+@app.route("/upload-url", methods=["POST"])
+def upload_url():
+    """
+    Cloudflare R2 için presigned PUT/GET URL üretir.
+    Body: { "contentType": "image/jpeg", "key": "uploads/xyz.jpg" (ops.) }
+    """
+    try:
+        client = r2_client()
+        if client is None:
+            return jsonify({"error": "R2 not configured"}), 500
+
+        data = request.get_json(force=True) or {}
+        content_type = data.get("contentType", "image/jpeg")
+        key = data.get("key") or f"uploads/{int(time.time()*1000)}.jpg"
+
+        put_url = client.generate_presigned_url(
+            "put_object",
+            Params={"Bucket": R2_BUCKET, "Key": key, "ContentType": content_type},
+            ExpiresIn=600,
+        )
+        get_url = client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": R2_BUCKET, "Key": key},
+            ExpiresIn=600,
+        )
+        return jsonify({"key": key, "putUrl": put_url, "getUrl": get_url})
+    except Exception as e:
+        logger.error(f"❌ upload-url hatası: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/analyze-url", methods=["POST"])
+def analyze_url():
+    """
+    Body: { "url": "https://..." }
+    Görseli URL'den indirir, Hugging Face'e aynı /analyze mantığıyla gönderir.
+    """
+    try:
+        data = request.get_json(force=True) or {}
+        url = data.get("url")
+        if not url:
+            return jsonify({"error": "url required"}), 400
+
+        r = requests.get(url, stream=True, timeout=20)
+        r.raise_for_status()
+        image_bytes = r.content
+        if len(image_bytes) < 100:
+            return jsonify({"error": f"Görsel çok küçük: {len(image_bytes)} bytes"}), 400
+
+        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+        payload = { "inputs": f"data:image/jpeg;base64,{base64_image}" }
+
+        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=120)
+        if response.status_code != 200:
+            logger.error(f"❌ HF API: {response.status_code} - {response.text}")
+            return jsonify({ "error": f"Hugging Face API hatası: {response.status_code}", "detail": response.text }), 500
+
+        result = response.json()
+        if len(result) >= 2:
+            result1, result2 = result[0], result[1]
+            if 'fake' in result1['label'].lower():
+                fake_prob = result1['score'] * 100
+                real_prob = result2['score'] * 100
+            else:
+                real_prob = result1['score'] * 100
+                fake_prob = result2['score'] * 100
+            prediction = "Sahte" if fake_prob > real_prob else "Gerçek"
+            confidence = max(fake_prob, real_prob)
+        else:
+            prediction, confidence, real_prob, fake_prob = "Bilinmiyor", 0, 0, 0
+
+        return jsonify({
+            "success": True,
+            "prediction": prediction,
+            "confidence": round(confidence, 2),
+            "probabilities": {"real": round(real_prob, 2), "fake": round(fake_prob, 2)},
+            "model_used": "dima806/deepfake_vs_real_image_detection",
+            "model_info": "ViT-based Deepfake vs Real detection",
+            "processing_time": time.time()
+        })
+    except Exception as e:
+        logger.error(f"❌ analyze-url hatası: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # ✅ GEMINI API PROXY ENDPOINT'LERİ
 @app.route("/api/gemini/text", methods=["POST"])
