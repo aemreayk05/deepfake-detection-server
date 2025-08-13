@@ -118,132 +118,22 @@ def model_info():
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
+    # Base64 kabul etmiyoruz; URL tabanlı akışa yönlendir
     try:
-        logger.info("🔍 Deepfake analizi isteği alındı")
-        
-        # Request kontrolü
         if not request.is_json:
-            logger.error("❌ JSON formatında veri bekleniyor")
-            return jsonify({"error": "JSON formatında veri bekleniyor"}), 400
-        
-        if 'image' not in request.json:
-            logger.error("❌ 'image' field'ı bulunamadı")
-            return jsonify({"error": "Görsel bulunamadı - 'image' field'ı gerekli"}), 400
-
-        image_data = request.json['image']
-        logger.info(f"📸 Görsel verisi alındı, uzunluk: {len(image_data)}")
-        logger.info(f"📸 Görsel verisi (ilk 100 karakter): {image_data[:100]}")
-        
-        if image_data.startswith('data:image'):
-            image_data = image_data.split(',')[1]
-            logger.info(f"📸 Base64 kısmı alındı, uzunluk: {len(image_data)}")
-        
-        try:
-            image_bytes = base64.b64decode(image_data)
-            logger.info(f"✅ Görsel decode edildi, boyut: {len(image_bytes)} bytes")
-            
-            # Görsel boyutu kontrolü
-            if len(image_bytes) < 100:
-                logger.error(f"❌ Görsel çok küçük: {len(image_bytes)} bytes")
-                return jsonify({"error": f"Görsel çok küçük: {len(image_bytes)} bytes - geçerli bir görsel değil"}), 400
-                
-        except Exception as e:
-            logger.error(f"❌ Base64 decode hatası: {e}")
-            return jsonify({"error": f"Görsel decode hatası: {str(e)}"}), 400
-
-        # ✅ HUGGING FACE API'YE GÖNDER
-        # Hugging Face API için doğru format: data:image/jpeg;base64,{base64_data}
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
-        
-        # API'nin beklediği format
-        payload = {
-            "inputs": f"data:image/jpeg;base64,{base64_image}"
-        }
-        
-        logger.info(f"📤 Hugging Face Deepfake API'ye gönderiliyor...")
-        logger.info(f"📤 URL: {HF_API_URL}")
-        logger.info(f"🔑 Token: {HF_TOKEN[:10]}..." if len(HF_TOKEN) > 10 else "🔑 Token: Geçersiz")
-        
-        response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=120)
-
-        logger.info(f"📥 Response status: {response.status_code}")
-        
-        if response.status_code != 200:
-            logger.error(f"❌ Hugging Face API hatası: {response.status_code}")
-            logger.error(f"❌ Response text: {response.text}")
+            return jsonify({"error": "JSON bekleniyor"}), 400
+        data = request.get_json(force=True) or {}
+        if data.get("url"):
+            # İstemci yanlış endpoint'i çağırdıysa nazikçe yönlendir
             return jsonify({
-                "error": f"Hugging Face API hatası: {response.status_code}",
-                "detail": response.text,
-                "token_configured": HF_TOKEN != "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-            }), 500
-
-        result = response.json()
-        logger.info(f"✅ Hugging Face API response: {result}")
-        
-        if len(result) >= 2:
-            result1 = result[0]
-            result2 = result[1]
-
-            logger.info(f"📊 Result 1: {result1}")
-            logger.info(f"📊 Result 2: {result2}")
-
-            # ✅ DEEPFAKE DETECTION MANTIĞI
-            # fake = sahte, real = gerçek
-            if 'fake' in result1['label'].lower():
-                fake_prob = result1['score'] * 100
-                real_prob = result2['score'] * 100
-                logger.info(f"🎭 Fake (Sahte) skoru: {fake_prob}%")
-                logger.info(f"✅ Real (Gerçek) skoru: {real_prob}%")
-            else:
-                real_prob = result1['score'] * 100
-                fake_prob = result2['score'] * 100
-                logger.info(f"✅ Real (Gerçek) skoru: {real_prob}%")
-                logger.info(f"🎭 Fake (Sahte) skoru: {fake_prob}%")
-
-            # ✅ DEEPFAKE TAHMİNİ
-            prediction = "Sahte" if fake_prob > real_prob else "Gerçek"
-            confidence = max(fake_prob, real_prob)
-            
-            logger.info(f"🎯 Deepfake Tahmini: {prediction} (Güven: {confidence}%)")
-            logger.info(f"🎭 Sahte olasılığı: {fake_prob}%")
-            logger.info(f"✅ Gerçek olasılığı: {real_prob}%")
-            
-        else:
-            logger.warning(f"⚠️ Beklenmeyen response format: {result}")
-            prediction = "Bilinmiyor"
-            confidence = 0
-            real_prob = 0
-            fake_prob = 0
-
-        final_result = {
-            "success": True,
-            "prediction": prediction,
-            "confidence": round(confidence, 2),
-            "probabilities": {
-                "real": round(real_prob, 2),
-                "fake": round(fake_prob, 2)
-            },
-            "model_used": "dima806/deepfake_vs_real_image_detection",
-            "model_info": "ViT-based Deepfake vs Real detection",
-            "processing_time": time.time(),
-            "raw_scores": {
-                "fake": fake_prob,
-                "real": real_prob
-            }
-        }
-        
-        logger.info(f"✅ Deepfake analizi tamamlandı: {prediction} ({confidence}%)")
-        return jsonify(final_result)
-
-    except Exception as e:
-        logger.error(f"❌ Deepfake analizi hatası: {e}")
-        logger.error(f"❌ Hata detayı: {traceback.format_exc()}")
+                "error": "Lütfen /analyze-url endpoint'ini kullanın",
+                "hint": "Body: { url: 'https://...' }"
+            }), 400
         return jsonify({
-            "success": False,
-            "error": "Sunucu hatası", 
-            "message": str(e),
-            "traceback": traceback.format_exc()
-        }), 500
+            "error": "Bu endpoint base64 kabul etmiyor. Lütfen önce /upload-url ile yükleyip /analyze-url kullanın."
+        }), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/upload-url", methods=["POST"])
 def upload_url():
@@ -347,6 +237,7 @@ def gemini_text():
         data = request.json
         prompt = data.get('prompt')
         image_data = data.get('imageData')
+        image_url = data.get('imageUrl')
         image_mime = data.get('imageMime', 'image/jpeg')
         
         if not prompt:
@@ -354,7 +245,21 @@ def gemini_text():
 
         # Gemini API isteği hazırla
         parts = []
-        if image_data:
+        if image_url:
+            # URL'den indir ve inline_data hazırla
+            try:
+                r = requests.get(image_url, timeout=20)
+                r.raise_for_status()
+                b64data = base64.b64encode(r.content).decode('utf-8')
+                parts.append({
+                    "inline_data": {
+                        "mime_type": image_mime,
+                        "data": b64data
+                    }
+                })
+            except Exception as e:
+                return jsonify({"success": False, "error": f"Görsel indirilemedi: {str(e)}"}), 400
+        elif image_data:
             parts.append({
                 "inline_data": {
                     "mime_type": image_mime,
@@ -423,6 +328,7 @@ def gemini_image():
         data = request.json
         prompt = data.get('prompt')
         input_image_data = data.get('inputImageBase64')
+        input_image_url = data.get('inputImageUrl')
         input_image_mime = data.get('inputImageMime', 'image/jpeg')
         
         if not prompt:
@@ -430,7 +336,21 @@ def gemini_image():
 
         # Gemini API isteği hazırla
         parts = []
-        if input_image_data:
+        if input_image_url:
+            try:
+                r = requests.get(input_image_url, timeout=20)
+                r.raise_for_status()
+                b64data = base64.b64encode(r.content).decode('utf-8')
+                parts.append({
+                    "inline_data": {
+                        "mime_type": input_image_mime,
+                        "data": b64data
+                    }
+                })
+            except Exception as e:
+                return jsonify({"success": False, "error": f"Görsel indirilemedi: {str(e)}"}), 400
+            parts.append({"text": f"Edit this image: {prompt}"})
+        elif input_image_data:
             parts.append({
                 "inline_data": {
                     "mime_type": input_image_mime,
