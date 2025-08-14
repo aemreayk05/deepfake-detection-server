@@ -765,16 +765,25 @@ def gemini_image():
             parts.append({"text": f"Edit this image: {prompt}"})
         elif input_image_data:
             try:
+                # ✅ DÜZELTİLDİ: Debug logging ekle
+                logger.info(f"Processing input_image_data, type: {type(input_image_data)}")
+                logger.info(f"Input data length: {len(input_image_data) if input_image_data else 0}")
+                logger.info(f"Input data starts with: {str(input_image_data)[:50] if input_image_data else 'None'}")
+                
                 if input_image_data.startswith('data:image'):
                     input_image_data = input_image_data.split(',')[1]
+                    logger.info("Removed data URI prefix")
                     
                 image_bytes = base64.b64decode(input_image_data)
+                logger.info(f"Base64 decoded, size: {len(image_bytes)} bytes")
+                
                 if len(image_bytes) > 5 * 1024 * 1024:  # 5MB
                     return jsonify({"error": "Input image too large"}), 413
                     
                 # Görseli optimize et - DÜZELTİLDİ: MIME sabitlendi
                 optimized_bytes = shrink_image(image_bytes, max_side=1024, format='JPEG', quality=85)
                 b64data = base64.b64encode(optimized_bytes).decode('utf-8')
+                logger.info(f"Image optimized, final size: {len(optimized_bytes)} bytes")
                 
                 # ✅ DÜZELTİLDİ: MIME her zaman image/jpeg (shrink sonrası)
                 parts.append({
