@@ -828,6 +828,10 @@ def gemini_image():
 
         gemini_data = response.json()
         
+        # ✅ BETTER LOGGING EKLE
+        logger.info(f"Gemini response status: {response.status_code}")
+        logger.info(f"Gemini response keys: {list(gemini_data.keys())}")
+        
         # Safety check
         if gemini_data.get('candidates') and gemini_data['candidates'][0]:
             candidate = gemini_data['candidates'][0]
@@ -848,12 +852,32 @@ def gemini_image():
             
             # Image data ara
             if candidate.get('content'):
-                for part in candidate['content']['parts']:
+                logger.info(f"Candidate content parts count: {len(candidate['content']['parts'])}")
+                for i, part in enumerate(candidate['content']['parts']):
+                    logger.info(f"Part {i} keys: {list(part.keys())}")
+                    if 'inlineData' in part:
+                        logger.info(f"Part {i} inlineData keys: {list(part['inlineData'].keys())}")
+                        logger.info(f"Part {i} data length: {len(part['inlineData'].get('data', ''))}")
                     # ✅ DÜZELTİLDİ: inlineData ile uyumlu
                     if part.get('inlineData') and part['inlineData'].get('data'):
-                        logger.info("Gemini image generated")
                         inline_data_b64 = part['inlineData']['data']
                         mime_type = part['inlineData'].get('mimeType', 'image/png')
+                        
+                        # ✅ BASE64 VALIDATION EKLE
+                        if not inline_data_b64 or inline_data_b64 == 'undefined' or len(inline_data_b64) < 100:
+                            logger.error(f"Invalid base64 data: length={len(inline_data_b64) if inline_data_b64 else 0}, data={inline_data_b64[:50] if inline_data_b64 else 'None'}")
+                            continue  # Sonraki part'a geç
+                        
+                        # Base64 decode test et
+                        try:
+                            test_bytes = base64.b64decode(inline_data_b64)
+                            if len(test_bytes) == 0:
+                                logger.error("Empty image data after base64 decode")
+                                continue
+                            logger.info(f"✅ Gemini image generated - size: {len(test_bytes)} bytes")
+                        except Exception as e:
+                            logger.error(f"Invalid base64 format: {e}")
+                            continue
 
                         # Eğer R2 yapılandırılmışsa görüntüyü yükleyip URL döndür
                         try:
