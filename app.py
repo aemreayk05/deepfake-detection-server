@@ -108,11 +108,26 @@ def is_url_safe(url, allowed_hosts=None):
 def shrink_image(image_bytes, max_side=1024, format='JPEG', quality=85):
     """Görseli küçültür ve yeniden kodlar - MIME ve boyut kontrolü eklendi"""
     try:
-        img = Image.open(io.BytesIO(image_bytes))
+        # ✅ DÜZELTİLDİ: Detaylı debug logging
+        logger.info(f"shrink_image called with {len(image_bytes)} bytes")
+        logger.info(f"First 20 bytes: {image_bytes[:20]}")
+        
+        # Görsel verisi geçerli mi kontrol et
+        if len(image_bytes) < 100:
+            raise ValueError(f"Görsel verisi çok küçük: {len(image_bytes)} bytes")
+            
+        # PIL ile açmaya çalış
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            logger.info(f"Image opened successfully: {img.format}, {img.size}, {img.mode}")
+        except Exception as pil_error:
+            logger.error(f"PIL cannot open image: {pil_error}")
+            logger.error(f"Image bytes hex: {image_bytes[:50].hex()}")
+            raise ValueError(f"Geçersiz görsel formatı: {str(pil_error)}")
         
         # Format kontrolü
-        if img.format not in {"JPEG", "PNG", "WEBP"}:
-            raise ValueError(f"Desteklenmeyen format: {img.format}")
+        if img.format not in {"JPEG", "PNG", "WEBP", "GIF", "BMP"}:
+            logger.warning(f"Unusual format: {img.format}, trying to convert...")
             
         # Piksel sayısı kontrolü (20MP limit)
         if img.width * img.height > 20_000_000:
@@ -774,8 +789,33 @@ def gemini_image():
                     input_image_data = input_image_data.split(',')[1]
                     logger.info("Removed data URI prefix")
                     
-                image_bytes = base64.b64decode(input_image_data)
-                logger.info(f"Base64 decoded, size: {len(image_bytes)} bytes")
+                # ✅ DÜZELTİLDİ: Base64 decode ile hata kontrolü
+                try:
+                    image_bytes = base64.b64decode(input_image_data)
+                    logger.info(f"Base64 decoded successfully, size: {len(image_bytes)} bytes")
+                    
+                    # Base64 decode sonrası veri kontrolü
+                    if len(image_bytes) < 100:
+                        raise ValueError(f"Decoded data too small: {len(image_bytes)} bytes")
+                        
+                    # İlk birkaç byte'ı kontrol et (görsel format signature)
+                    header_hex = image_bytes[:10].hex()
+                    logger.info(f"Image header hex: {header_hex}")
+                    
+                    # Bilinen format signature'ları kontrol et
+                    if image_bytes.startswith(b'\xff\xd8\xff'):
+                        logger.info("Detected JPEG format")
+                    elif image_bytes.startswith(b'\x89PNG'):
+                        logger.info("Detected PNG format")
+                    elif image_bytes.startswith(b'RIFF') and b'WEBP' in image_bytes[:20]:
+                        logger.info("Detected WEBP format")
+                    else:
+                        logger.warning(f"Unknown format signature: {header_hex}")
+                        
+                except Exception as decode_error:
+                    logger.error(f"Base64 decode failed: {decode_error}")
+                    logger.error(f"Input data sample: {input_image_data[:100]}")
+                    raise ValueError(f"Base64 decode hatası: {str(decode_error)}")
                 
                 if len(image_bytes) > 5 * 1024 * 1024:  # 5MB
                     return jsonify({"error": "Input image too large"}), 413
